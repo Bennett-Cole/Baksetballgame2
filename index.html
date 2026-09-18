@@ -56,7 +56,7 @@
         <div id="feedback-distance" class="text-xs font-bold tracking-normal opacity-90 mt-0.5">Shot Distance: 15.2 ft</div>
     </div>
 
-    <!-- Controls Overlay (Clickable to Hide) -->
+    <!-- Controls Overlay -->
     <div id="controls-overlay" onclick="this.style.display='none'" class="absolute bottom-6 left-6 cursor-pointer bg-black/80 hover:bg-black/90 backdrop-blur-md p-4 rounded-lg border border-white/10 text-xs text-gray-300 space-y-1.5 transition-all shadow-xl group z-10">
         <div class="text-[10px] text-yellow-400/70 font-bold uppercase tracking-wider mb-1 group-hover:text-yellow-400 flex justify-between items-center">
             <span>Controls</span>
@@ -68,7 +68,8 @@
         <p><span class="bg-yellow-500 text-black px-1.5 py-0.5 rounded font-black">ARROW LEFT</span> Between-The-Legs Crossover</p>
         <p><span class="bg-yellow-500 text-black px-1.5 py-0.5 rounded font-black">ARROW RIGHT</span> Behind-The-Back Crossover</p>
         <p><span class="bg-yellow-500 text-black px-1.5 py-0.5 rounded font-black">P</span> Spawn New Ball In Hand</p>
-        <p><span class="bg-yellow-500 text-black px-1.5 py-0.5 rounded font-black">R</span> Reset Position & Retrieve Ball</p>
+        <p><span class="bg-yellow-500 text-black px-1.5 py-0.5 rounded font-black">0</span> Reset Player & Ball Position</p>
+        <p><span class="bg-yellow-500 text-black px-1.5 py-0.5 rounded font-black">R</span> Defense: Attempt Steal (35% Chance)</p>
         <p><span class="bg-yellow-500 text-black px-1.5 py-0.5 rounded font-black">HOLD Q</span> Charge Dunk Meter (Release in GREEN! Further = Harder)</p>
         <p><span class="bg-yellow-500 text-black px-1.5 py-0.5 rounded font-black">HOLD SPACE</span> Offense: Charge Shot | Defense: Jump Block/Contest</p>
     </div>
@@ -85,13 +86,9 @@
     <script>
         // --- CONSTANTS & SCALE CALCULATIONS ---
         const UNITS_TO_FEET = 3.28;
-        
-        // Player height calculation: player mesh spans y=0.0 to top of cap at ~1.83 units (6.0 feet)
         const PLAYER_HEIGHT_UNITS = 1.83; 
-        const HOOP_HEIGHT_OFFSET_FT = 6.0; // Hoop is 6 ft taller than player (12.0 ft rim total)
-        const HOOP_HEIGHT_OFFSET_UNITS = HOOP_HEIGHT_OFFSET_FT / UNITS_TO_FEET; // ~1.83 units
-        
-        // Target Rim Y-Height = 1.83 + 1.83 = 3.66 units (12.0 ft)
+        const HOOP_HEIGHT_OFFSET_FT = 6.0;
+        const HOOP_HEIGHT_OFFSET_UNITS = HOOP_HEIGHT_OFFSET_FT / UNITS_TO_FEET;
         const TARGET_RIM_Y = PLAYER_HEIGHT_UNITS + HOOP_HEIGHT_OFFSET_UNITS;
 
         // --- 1. REALISTIC RUCKER PARK ASPHALT COURT TEXTURE ---
@@ -436,14 +433,13 @@
             scene.add(spec);
         });
 
-        // --- 4. HOOP (Scaled exactly to Player Height + 6 Feet = 3.66 units) ---
+        // --- 4. HOOP ---
         const hoopGroup = new THREE.Group();
         const hoopZ = -9.5;
         hoopGroup.position.set(0, 0, hoopZ);
 
         const poleMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.6, metalness: 0.4 });
 
-        // Pole scaled up to reach higher extension height
         const mainPole = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, TARGET_RIM_Y + 1.15, 16), poleMat);
         mainPole.position.set(0, (TARGET_RIM_Y + 1.15) / 2, -0.8);
         mainPole.castShadow = true;
@@ -591,17 +587,15 @@
         player.position.set(0, 0, 5);
         scene.add(player);
 
-        // Direct, stable movement speed
         const playerSpeed = 6.0;
 
-        // Defensive Jump State
         let isDefensiveJumping = false;
         let defJumpTimer = 0;
         const DEF_JUMP_DURATION = 0.65;
 
         // --- 5B. AI OPPONENT CHARACTER & STATE ---
         const aiPlayer = new THREE.Group();
-        const aiJerseyMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.6 }); // Red Jersey
+        const aiJerseyMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.6 });
         const aiShortsMat = new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.6 });
         const aiSkinMat = new THREE.MeshStandardMaterial({ color: 0x713f12, roughness: 0.8 });
 
@@ -670,23 +664,44 @@
         const aiRightShin = createBlockyLimb(0.20, 0.35, 0.20, aiSkinMat);
         aiRightKnee.add(aiRightShin.group);
 
-        aiPlayer.position.set(0, 0, 1);
+        aiPlayer.position.set(0, 0, 5);
         scene.add(aiPlayer);
 
-        // AI Logic & State
         const aiSpeed = 4.8;
         let aiShotTimer = 0;
         let aiIsShooting = false;
         let aiShotPhase = 0;
         let aiStealCooldown = 0;
+        let aiIsJumping = false;
+        let aiJumpTimer = 0;
+        const AI_JUMP_DURATION = 0.65;
         const aiStatusEl = document.getElementById('ai-status');
 
-        // --- 6. BASKETBALL MANAGER & MULTI-BALL SYSTEM ---
+        // AI Ankle-Breaker / Wrong Way Variables
+        let crossoverCount = 0;
+        let crossoverResetTimer = 0;
+        let isAIRecovering = false;
+        let aiRecoveryTimer = 0;
+        let aiFallStartPos = new THREE.Vector3();
+        let aiFallTargetPos = new THREE.Vector3();
+        const AI_RECOVERY_DURATION = 2.0;
+
+        // AI Lateral Dribble Logic Variables
+        let aiLateralTimer = 0;
+        let aiLateralDuration = 1.5;
+        let aiLateralDir = 1;
+
+        function resetAILateralState() {
+            aiLateralTimer = 0;
+            aiLateralDir = Math.random() < 0.5 ? 1 : -1;
+            aiLateralDuration = 1.2 + Math.random() * 0.8;
+        }
+
+        // --- 6. BASKETBALL MANAGER ---
         const ballRadius = 0.24; 
         const ballMat = new THREE.MeshStandardMaterial({ color: 0xea580c, roughness: 0.6 });
         const ballGeo = new THREE.SphereGeometry(ballRadius, 32, 32);
 
-        // Array storing all active basketballs
         const balls = [];
         let activeBall = null;
 
@@ -699,16 +714,15 @@
                 mesh: mesh,
                 pos: new THREE.Vector3(),
                 vel: new THREE.Vector3(),
-                state: 'dribbling', // 'dribbling' or 'in_flight'
+                state: 'dribbling',
                 hasScored: false,
-                heldBy: 'player' // 'player' or 'ai'
+                heldBy: 'player'
             };
 
             balls.push(ballData);
             return ballData;
         }
 
-        // Initialize primary ball
         activeBall = createNewBall();
 
         let isRightHand = true;
@@ -718,7 +732,6 @@
         let stepBackStartPos = new THREE.Vector3();
         let stepBackTargetPos = new THREE.Vector3();
 
-        // STAMINA SYSTEM VARIABLES
         let stamina = 100;
         const maxStamina = 100;
         const staminaDrainRateDribble = 5;
@@ -727,7 +740,6 @@
         const staminaBarEl = document.getElementById('stamina-bar');
         const staminaTextEl = document.getElementById('stamina-text');
         
-        // Dunk state vars
         let isChargingDunk = false;
         let isDunking = false;
         let dunkTimer = 0;
@@ -737,7 +749,6 @@
         let dunkTakeoffDistFt = "0.0";
         let dunkSpeedFactor = 1.0;
 
-        // Fall & Recovery State
         let isFalling = false;
         let fallTimer = 0;
         const FALL_DURATION = 2.2;
@@ -756,7 +767,6 @@
             if (!activeBall || activeBall.state !== 'dribbling') return;
             showFeedback("EXHAUSTED! LOST CONTROL OF BALL!", "text-red-500 border-red-500/50", "bg-red-950/80");
             
-            // Fumble ball forwards
             activeBall.state = 'in_flight';
             const fumbleAngle = player.rotation.y;
             activeBall.vel.set(-Math.sin(fumbleAngle) * 3, 3, -Math.cos(fumbleAngle) * 3);
@@ -769,24 +779,53 @@
             showFeedback("NEW BALL SPAWNED!", "text-yellow-400 border-yellow-500/50", "bg-yellow-950/80");
         }
 
-        // RESET PLAYERS TO TOP OF COURT AFTER SCORE
+        function triggerCrossoverCheck() {
+            const distToAI = player.position.distanceTo(aiPlayer.position);
+            if (distToAI < 4.0) {
+                crossoverCount++;
+                crossoverResetTimer = 3.5;
+                if (crossoverCount >= 6) {
+                    isAIRecovering = true;
+                    aiRecoveryTimer = 0;
+                    crossoverCount = 0;
+
+                    aiFallStartPos.copy(aiPlayer.position);
+                    const fallOffset = new THREE.Vector3().subVectors(aiPlayer.position, player.position);
+                    fallOffset.y = 0;
+                    if (fallOffset.lengthSq() < 0.001) fallOffset.set(0, 0, 1);
+                    fallOffset.normalize().multiplyScalar(1.5);
+                    
+                    aiFallTargetPos.copy(player.position).add(fallOffset);
+
+                    showFeedback("ANKLES BROKEN! AI FELL DOWN!", "text-yellow-400 border-yellow-500/50", "bg-yellow-950/80");
+                }
+            }
+        }
+
+        // RESET PLAYERS AFTER A SCORE
         function resetPossessionAfterScore(scoringWinner) {
             setTimeout(() => {
-                // Clear state
                 balls.forEach(b => scene.remove(b.mesh));
                 balls.length = 0;
 
-                // Reset Positions to top of court
                 player.position.set(0, 0, 5);
                 player.rotation.set(0, 0, 0);
 
-                aiPlayer.position.set(0, 0, 1);
+                // AI starts further back from the hoop ONLY if it scored (z = 10 instead of z = 5)
+                const aiZ = scoringWinner === 'ai' ? 10 : 5;
+                aiPlayer.position.set(0, 0, aiZ);
                 aiPlayer.rotation.set(0, 0, 0);
 
                 aiIsShooting = false;
                 aiShotPhase = 0;
+                aiIsJumping = false;
+                aiJumpTimer = 0;
+                isAIRecovering = false;
+                aiRecoveryTimer = 0;
+                crossoverCount = 0;
+                aiPelvis.rotation.set(0, 0, 0);
+                resetAILateralState();
 
-                // Give scorer the ball at top
                 activeBall = createNewBall();
                 activeBall.heldBy = scoringWinner;
 
@@ -808,7 +847,7 @@
                 meterContainer.classList.remove('flex');
 
                 showFeedback(
-                    scoringWinner === 'player' ? "PLAYER SCORED! TAKE OUT AT TOP" : "AI SCORED! AI BALL AT TOP",
+                    scoringWinner === 'player' ? "PLAYER SCORED! TAKE OUT AT TOP" : "AI SCORED! AI TAKING OUT DEEP",
                     scoringWinner === 'player' ? "text-green-400 border-green-500/50" : "text-red-400 border-red-500/50",
                     scoringWinner === 'player' ? "bg-green-950/80" : "bg-red-950/80"
                 );
@@ -819,9 +858,16 @@
             player.position.set(0, 0, 5);
             player.rotation.set(0, 0, 0);
 
-            aiPlayer.position.set(0, 0, 1);
+            aiPlayer.position.set(0, 0, 5);
             aiIsShooting = false;
             aiShotPhase = 0;
+            aiIsJumping = false;
+            aiJumpTimer = 0;
+            isAIRecovering = false;
+            aiRecoveryTimer = 0;
+            crossoverCount = 0;
+            aiPelvis.rotation.set(0, 0, 0);
+            resetAILateralState();
 
             balls.forEach(b => scene.remove(b.mesh));
             balls.length = 0;
@@ -842,26 +888,35 @@
             dunkTimer = 0;
             jumpShotPhase = 0;
             shotMeterProgress = 0;
-            
-            // Reset scores on full reset
-            playerScore = 0;
-            aiScore = 0;
-            playerScoreEl.innerText = playerScore;
-            aiScoreEl.innerText = aiScore;
 
             meterContainer.classList.add('hidden');
             meterContainer.classList.remove('flex');
             showFeedback("RESET TO COURT & RETRIEVED BALL", "text-green-400 border-green-500/50", "bg-green-950/80", getPlayerDistanceInFeet());
         }
 
+        function attemptPlayerSteal() {
+            const distToAI = player.position.distanceTo(aiPlayer.position);
+            if (distToAI > 2.5) {
+                showFeedback("TOO FAR TO STEAL!", "text-gray-400 border-gray-500/50", "bg-gray-900/80");
+                return;
+            }
+
+            const successRate = 0.35;
+            if (Math.random() < successRate) {
+                activeBall.heldBy = 'player';
+                showFeedback("STEAL SUCCESSFUL!", "text-green-400 border-green-500/50", "bg-green-950/80");
+            } else {
+                showFeedback("STEAL FAILED!", "text-red-400 border-red-500/50", "bg-red-950/80");
+            }
+        }
+
         // --- 7. METER & UI CONTROLS ---
         let shotMeterProgress = 0;
-        let activeMeterType = 'shot'; // 'shot' or 'dunk'
+        let activeMeterType = 'shot';
         let isChargingShot = false;
         let jumpShotPhase = 0;
         let shotTakenDistance = "0.0";
         
-        // Head-to-Head Scores
         let playerScore = 0;
         let aiScore = 0;
 
@@ -871,33 +926,35 @@
         const keys = {};
         window.addEventListener('keydown', e => {
             keys[e.code] = true;
-            if (e.code === 'KeyR') resetPlayerAndBall();
+            if (e.code === 'Digit0' || e.code === 'Numpad0') resetPlayerAndBall();
+            if (e.code === 'KeyR') {
+                if (activeBall && activeBall.heldBy === 'ai') {
+                    attemptPlayerSteal();
+                }
+            }
             if (e.code === 'KeyP') spawnNewBallInHand();
 
-            // SPACE BAR: DEFENSE JUMP WHEN PLAYER DOES NOT HAVE BALL
             if (e.code === 'Space' && (!activeBall || activeBall.heldBy !== 'player' || activeBall.state !== 'dribbling') && !isDefensiveJumping && !isFalling && !isDunking) {
                 isDefensiveJumping = true;
                 defJumpTimer = 0;
             }
 
-            // Crossovers require stamina
             if (stamina <= 5 && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
                 showFeedback("TOO TIRED FOR TRICK MOVE!", "text-orange-400 border-orange-500/50", "bg-orange-950/80");
                 return;
             }
             
-            // Crossovers driven by Arrow Keys
             if (e.code === 'ArrowUp' && activeBall && activeBall.heldBy === 'player' && activeBall.state === 'dribbling' && !isCrossover && !isDunking && !isChargingShot && !isChargingDunk && !isFalling) {
                 isCrossover = true; crossoverType = 'front'; crossoverTimer = 0;
                 stamina = Math.max(0, stamina - staminaDrainRateCrossover);
+                triggerCrossoverCheck();
             }
-            // Arrow Down = Step-Back Move!
             if (e.code === 'ArrowDown' && activeBall && activeBall.heldBy === 'player' && activeBall.state === 'dribbling' && !isCrossover && !isDunking && !isChargingShot && !isChargingDunk && !isFalling) {
                 isCrossover = true; crossoverType = 'stepback'; crossoverTimer = 0;
                 stamina = Math.max(0, stamina - staminaDrainRateCrossover);
+                triggerCrossoverCheck();
                 stepBackStartPos.copy(player.position);
                 
-                // Direction away from hoop
                 const awayDir = new THREE.Vector3().subVectors(player.position, hoopTargetPos);
                 awayDir.y = 0;
                 if (awayDir.lengthSq() < 0.001) awayDir.set(0, 0, 1);
@@ -910,13 +967,14 @@
             if (e.code === 'ArrowLeft' && activeBall && activeBall.heldBy === 'player' && activeBall.state === 'dribbling' && !isCrossover && !isDunking && !isChargingShot && !isChargingDunk && !isFalling) {
                 isCrossover = true; crossoverType = 'legs'; crossoverTimer = 0;
                 stamina = Math.max(0, stamina - staminaDrainRateCrossover);
+                triggerCrossoverCheck();
             }
             if (e.code === 'ArrowRight' && activeBall && activeBall.heldBy === 'player' && activeBall.state === 'dribbling' && !isCrossover && !isDunking && !isChargingShot && !isChargingDunk && !isFalling) {
                 isCrossover = true; crossoverType = 'behind'; crossoverTimer = 0;
                 stamina = Math.max(0, stamina - staminaDrainRateCrossover);
+                triggerCrossoverCheck();
             }
 
-            // DUNK CHARGE START (KeyQ)
             if (e.code === 'KeyQ' && activeBall && activeBall.heldBy === 'player' && activeBall.state === 'dribbling' && !isDunking && !isChargingShot && !isChargingDunk && !isFalling) {
                 isChargingDunk = true;
                 activeMeterType = 'dunk';
@@ -932,7 +990,6 @@
         window.addEventListener('keyup', e => {
             keys[e.code] = false;
 
-            // RELEASE DUNK CHARGE
             if (e.code === 'KeyQ' && isChargingDunk) {
                 isChargingDunk = false;
                 meterContainer.classList.add('hidden');
@@ -941,7 +998,6 @@
                 const isGreen = (shotMeterProgress >= currentGreenMin && shotMeterProgress <= currentGreenMax);
                 dunkSuccess = isGreen;
 
-                // Launch Dunk
                 isDunking = true;
                 dunkTimer = 0;
                 dunkStartPos.copy(player.position);
@@ -989,9 +1045,30 @@
             meterContainer.style.top = `${y}px`;
         }
 
+        function calculateContestPenalty() {
+            const distToAI = player.position.distanceTo(aiPlayer.position);
+            let penalty = 0;
+
+            if (distToAI < 2.5) {
+                penalty += (2.5 - distToAI) * 2.5; 
+            }
+            if (aiIsJumping && distToAI < 3.0) {
+                penalty += 6.0; 
+            }
+            if (aiPlayer.position.y > 0.3 && distToAI < 2.5) {
+                penalty += 4.0;
+            }
+
+            return penalty;
+        }
+
         function updateGreenZoneSizeForShot() {
             const dist = player.position.distanceTo(hoopTargetPos);
-            let windowSize = Math.max(3, 20 - (dist - 2) * 1.0);
+            let baseWindowSize = Math.max(3, 20 - (dist - 2) * 1.0);
+            
+            const contestPenalty = calculateContestPenalty();
+            let windowSize = Math.max(1.5, baseWindowSize - contestPenalty);
+
             const center = 79;
             currentGreenMin = center - windowSize / 2;
             currentGreenMax = center + windowSize / 2;
@@ -1002,7 +1079,11 @@
 
         function updateGreenZoneSizeForDunk() {
             const distFt = parseFloat(getPlayerDistanceInFeet());
-            let windowSize = Math.max(2.5, 28 - (distFt * 1.25));
+            let baseWindowSize = Math.max(2.5, 28 - (distFt * 1.25));
+
+            const contestPenalty = calculateContestPenalty();
+            let windowSize = Math.max(1.5, baseWindowSize - contestPenalty);
+
             const center = 80;
             currentGreenMin = center - windowSize / 2;
             currentGreenMax = center + windowSize / 2;
@@ -1104,114 +1185,271 @@
         function updateAIBehavior(delta, time) {
             aiStealCooldown -= delta;
 
+            if (crossoverResetTimer > 0) {
+                crossoverResetTimer -= delta;
+                if (crossoverResetTimer <= 0) {
+                    crossoverCount = 0;
+                }
+            }
+
+            if (isAIRecovering) {
+                aiRecoveryTimer += delta;
+                aiStatusEl.innerText = "ANKLES BROKEN! DOWN!";
+                aiStatusEl.className = "font-bold text-yellow-400 animate-pulse";
+
+                const progress = Math.min(1.0, aiRecoveryTimer / AI_RECOVERY_DURATION);
+
+                if (progress <= 0.3) {
+                    // Phase 1: Fall down to target pos
+                    const fallProgress = progress / 0.3;
+                    aiPlayer.position.lerpVectors(aiFallStartPos, aiFallTargetPos, fallProgress);
+                    aiPlayer.rotation.x = THREE.MathUtils.lerp(0, -Math.PI / 2, fallProgress);
+                    aiPlayer.position.y = THREE.MathUtils.lerp(0, 0.2, fallProgress);
+
+                    aiLeftShoulder.rotation.z = -1.2;
+                    aiRightShoulder.rotation.z = 1.2;
+                    aiLeftHip.rotation.x = -0.8;
+                    aiRightHip.rotation.x = -0.8;
+                } else if (progress <= 0.7) {
+                    // Phase 2: Stay fallen on ground
+                    aiPlayer.position.copy(aiFallTargetPos);
+                    aiPlayer.position.y = 0.2;
+                    aiPlayer.rotation.x = -Math.PI / 2;
+                } else {
+                    // Phase 3: Getting back up
+                    const riseProgress = (progress - 0.7) / 0.3;
+                    aiPlayer.position.y = THREE.MathUtils.lerp(0.2, 0, riseProgress);
+                    aiPlayer.rotation.x = THREE.MathUtils.lerp(-Math.PI / 2, 0, riseProgress);
+
+                    aiLeftShoulder.rotation.z = THREE.MathUtils.lerp(-1.2, 0, riseProgress);
+                    aiRightShoulder.rotation.z = THREE.MathUtils.lerp(1.2, 0, riseProgress);
+                    aiLeftHip.rotation.x = THREE.MathUtils.lerp(-0.8, 0, riseProgress);
+                    aiRightHip.rotation.x = THREE.MathUtils.lerp(0.8, 0, riseProgress);
+                }
+
+                if (aiRecoveryTimer >= AI_RECOVERY_DURATION) {
+                    isAIRecovering = false;
+                    aiRecoveryTimer = 0;
+                    aiPlayer.rotation.set(0, 0, 0);
+                    aiPelvis.rotation.set(0, 0, 0);
+                    aiLeftShoulder.rotation.set(0, 0, 0);
+                    aiRightShoulder.rotation.set(0, 0, 0);
+                    aiLeftHip.rotation.x = 0;
+                    aiRightHip.rotation.x = 0;
+                }
+                return;
+            }
+
+            const distToPlayerUnits = aiPlayer.position.distanceTo(player.position);
+
             const aiHasBall = activeBall && activeBall.heldBy === 'ai' && activeBall.state === 'dribbling';
             const playerHasBall = activeBall && activeBall.heldBy === 'player' && activeBall.state === 'dribbling';
 
+            if (aiIsJumping) {
+                aiJumpTimer += delta;
+                const progress = aiJumpTimer / AI_JUMP_DURATION;
+                if (progress <= 1.0) {
+                    aiPlayer.position.y = Math.sin(progress * Math.PI) * 1.2;
+                    aiLeftShoulder.rotation.x = -Math.PI * 0.85;
+                    aiRightShoulder.rotation.x = -Math.PI * 0.85;
+                } else {
+                    aiIsJumping = false;
+                    aiPlayer.position.y = 0;
+                    aiLeftShoulder.rotation.x = 0;
+                    aiRightShoulder.rotation.x = 0;
+                }
+            }
+
             if (aiHasBall) {
                 // OFFENSE MODE
-                aiStatusEl.innerText = "ATTACKING HOOP";
-                aiStatusEl.className = "font-bold text-yellow-400 animate-pulse";
+                const distToPlayerUnits = aiPlayer.position.distanceTo(player.position);
+                const distToPlayerFt = distToPlayerUnits * UNITS_TO_FEET;
 
-                const distToHoop = aiPlayer.position.distanceTo(hoopTargetPos);
-                
-                if (!aiIsShooting) {
-                    // Move towards comfortable shooting range (~4 to 7 units)
-                    const targetDist = 5.5;
-                    const dirToHoop = new THREE.Vector3().subVectors(hoopTargetPos, aiPlayer.position);
-                    dirToHoop.y = 0;
-                    
-                    if (distToHoop > targetDist + 0.5) {
-                        dirToHoop.normalize();
-                        aiPlayer.position.addScaledVector(dirToHoop, aiSpeed * delta);
-                        
-                        // Dribble animation
-                        aiPlayer.position.y = Math.abs(Math.sin(time * 10)) * 0.05;
-                        aiLeftHip.rotation.x = Math.sin(time * 10) * 0.4;
-                        aiRightHip.rotation.x = -Math.sin(time * 10) * 0.4;
-                    } else {
-                        // In position -> Trigger Jump Shot
-                        aiIsShooting = true;
-                        aiShotTimer = 0;
-                        aiShotPhase = 0;
-                    }
+                if (distToPlayerFt > 10.0) {
+                    // Defender is open/further than 10 ft: Perform lateral dribble routine then pull up
+                    if (aiLateralTimer < aiLateralDuration) {
+                        aiStatusEl.innerText = "SIZING UP (LATERAL)";
+                        aiStatusEl.className = "font-bold text-yellow-400";
 
-                    aiPlayer.lookAt(hoopTargetPos.x, aiPlayer.position.y, hoopTargetPos.z);
+                        aiLateralTimer += delta;
 
-                    // Ball attached to AI right hand
-                    activeBall.pos.set(aiPlayer.position.x + 0.4, 0.25 + Math.abs(Math.sin(time * 12)) * 0.4, aiPlayer.position.z - 0.2);
-                    activeBall.mesh.position.copy(activeBall.pos);
-                } else {
-                    // Executing Shot
-                    aiShotTimer += delta;
-                    aiShotPhase = Math.min(1.0, aiShotTimer * 2.5);
+                        // Move side-to-side along the X-axis
+                        aiPlayer.position.x += aiLateralDir * aiSpeed * 0.7 * delta;
+                        aiPlayer.position.x = Math.max(-roomWidth / 2 + 1.2, Math.min(roomWidth / 2 - 1.2, aiPlayer.position.x));
 
-                    aiPlayer.position.y = Math.sin(aiShotPhase * Math.PI) * 0.6;
-                    aiRightShoulder.rotation.x = -Math.PI * 0.7 * aiShotPhase;
-
-                    activeBall.pos.set(aiPlayer.position.x, aiPlayer.position.y + 2.0, aiPlayer.position.z - 0.2);
-                    activeBall.mesh.position.copy(activeBall.pos);
-
-                    if (aiShotPhase >= 0.9 && activeBall.state === 'dribbling') {
-                        activeBall.state = 'in_flight';
-
-                        // CHECK USER DEFENSIVE JUMP / CONTEST BLOCK
-                        let makeChance = 0.65;
-                        const distUserToAI = player.position.distanceTo(aiPlayer.position);
-
-                        if (isDefensiveJumping && distUserToAI < 2.2) {
-                            if (distUserToAI < 1.4 && player.position.y > 0.4) {
-                                // COMPLETE BLOCK / SHOT REJECTION
-                                makeChance = 0.0;
-                                showFeedback("BLOCKED BY PLAYER!", "text-cyan-400 border-cyan-500/50", "bg-cyan-950/80");
-                                activeBall.vel = new THREE.Vector3((Math.random() - 0.5) * 6, 2 + Math.random() * 3, 5 + Math.random() * 4);
-                            } else {
-                                // HEAVY CONTEST (Reduces AI percentage greatly)
-                                makeChance = 0.15;
-                                showFeedback("HEAVY DEFENSIVE CONTEST!", "text-cyan-400 border-cyan-500/50", "bg-cyan-950/80");
-                                activeBall.vel = calculateShotVelocity(activeBall.pos, hoopTargetPos, Math.random() < makeChance);
-                            }
-                        } else {
-                            activeBall.vel = calculateShotVelocity(activeBall.pos, hoopTargetPos, Math.random() < makeChance);
+                        if (Math.abs(aiPlayer.position.x) > (roomWidth / 2 - 1.5)) {
+                            aiLateralDir *= -1;
                         }
 
-                        activeBall = null;
-                        aiIsShooting = false;
-                        aiShotPhase = 0;
+                        aiPlayer.position.y = Math.abs(Math.sin(time * 10)) * 0.05;
+                        aiLeftHip.rotation.z = Math.sin(time * 10) * 0.2;
+                        aiRightHip.rotation.z = -Math.sin(time * 10) * 0.2;
+
+                        aiPlayer.lookAt(hoopTargetPos.x, aiPlayer.position.y, hoopTargetPos.z);
+
+                        activeBall.pos.set(aiPlayer.position.x + (aiLateralDir * 0.35), 0.25 + Math.abs(Math.sin(time * 12)) * 0.4, aiPlayer.position.z - 0.2);
+                        activeBall.mesh.position.copy(activeBall.pos);
+                    } else {
+                        // Finished side-to-side moves and is still open: shoot jumper from perimeter
+                        aiStatusEl.innerText = "OPEN PULL-UP JUMPER";
+                        aiStatusEl.className = "font-bold text-yellow-400 animate-pulse";
+
+                        if (!aiIsShooting) {
+                            aiIsShooting = true;
+                            aiShotTimer = 0;
+                            aiShotPhase = 0;
+                        }
+
+                        aiShotTimer += delta;
+                        aiShotPhase = Math.min(1.0, aiShotTimer * 2.5);
+
+                        aiPlayer.position.y = Math.sin(aiShotPhase * Math.PI) * 0.6;
+                        aiRightShoulder.rotation.x = -Math.PI * 0.7 * aiShotPhase;
+
+                        activeBall.pos.set(aiPlayer.position.x, aiPlayer.position.y + 2.0, aiPlayer.position.z - 0.2);
+                        activeBall.mesh.position.copy(activeBall.pos);
+
+                        if (aiShotPhase >= 0.9 && activeBall.state === 'dribbling') {
+                            activeBall.state = 'in_flight';
+
+                            let makeChance = 0.70;
+                            if (isDefensiveJumping && distToPlayerUnits < 2.2) {
+                                makeChance = 0.20;
+                                showFeedback("CONTESTED JUMPER!", "text-cyan-400 border-cyan-500/50", "bg-cyan-950/80");
+                            }
+
+                            activeBall.vel = calculateShotVelocity(activeBall.pos, hoopTargetPos, Math.random() < makeChance);
+                            activeBall = null;
+                            aiIsShooting = false;
+                            aiShotPhase = 0;
+                            resetAILateralState();
+                        }
+                    }
+                } else {
+                    // Player is within 10 feet: Fall back to original AI offense (drive to rim/shoot inside)
+                    resetAILateralState();
+
+                    aiStatusEl.innerText = "ATTACKING HOOP";
+                    aiStatusEl.className = "font-bold text-yellow-400 animate-pulse";
+
+                    const distToHoop = aiPlayer.position.distanceTo(hoopTargetPos);
+                    
+                    if (!aiIsShooting) {
+                        const targetDist = 5.5;
+                        const dirToHoop = new THREE.Vector3().subVectors(hoopTargetPos, aiPlayer.position);
+                        dirToHoop.y = 0;
+                        
+                        if (distToHoop > targetDist + 0.5) {
+                            dirToHoop.normalize();
+                            aiPlayer.position.addScaledVector(dirToHoop, aiSpeed * delta);
+                            
+                            aiPlayer.position.y = Math.abs(Math.sin(time * 10)) * 0.05;
+                            aiLeftHip.rotation.x = Math.sin(time * 10) * 0.4;
+                            aiRightHip.rotation.x = -Math.sin(time * 10) * 0.4;
+                        } else {
+                            aiIsShooting = true;
+                            aiShotTimer = 0;
+                            aiShotPhase = 0;
+                        }
+
+                        aiPlayer.lookAt(hoopTargetPos.x, aiPlayer.position.y, hoopTargetPos.z);
+
+                        activeBall.pos.set(aiPlayer.position.x + 0.4, 0.25 + Math.abs(Math.sin(time * 12)) * 0.4, aiPlayer.position.z - 0.2);
+                        activeBall.mesh.position.copy(activeBall.pos);
+                    } else {
+                        aiShotTimer += delta;
+                        aiShotPhase = Math.min(1.0, aiShotTimer * 2.5);
+
+                        aiPlayer.position.y = Math.sin(aiShotPhase * Math.PI) * 0.6;
+                        aiRightShoulder.rotation.x = -Math.PI * 0.7 * aiShotPhase;
+
+                        activeBall.pos.set(aiPlayer.position.x, aiPlayer.position.y + 2.0, aiPlayer.position.z - 0.2);
+                        activeBall.mesh.position.copy(activeBall.pos);
+
+                        if (aiShotPhase >= 0.9 && activeBall.state === 'dribbling') {
+                            activeBall.state = 'in_flight';
+
+                            let makeChance = 0.65;
+                            const distUserToAI = player.position.distanceTo(aiPlayer.position);
+
+                            if (isDefensiveJumping && distUserToAI < 2.2) {
+                                if (distUserToAI < 1.4 && player.position.y > 0.4) {
+                                    makeChance = 0.0;
+                                    showFeedback("BLOCKED BY PLAYER!", "text-cyan-400 border-cyan-500/50", "bg-cyan-950/80");
+                                    activeBall.vel = new THREE.Vector3((Math.random() - 0.5) * 6, 2 + Math.random() * 3, 5 + Math.random() * 4);
+                                } else {
+                                    makeChance = 0.15;
+                                    showFeedback("HEAVY DEFENSIVE CONTEST!", "text-cyan-400 border-cyan-500/50", "bg-cyan-950/80");
+                                    activeBall.vel = calculateShotVelocity(activeBall.pos, hoopTargetPos, Math.random() < makeChance);
+                                }
+                            } else {
+                                activeBall.vel = calculateShotVelocity(activeBall.pos, hoopTargetPos, Math.random() < makeChance);
+                            }
+
+                            activeBall = null;
+                            aiIsShooting = false;
+                            aiShotPhase = 0;
+                        }
                     }
                 }
             } else if (playerHasBall) {
                 // DEFENSE MODE
+                resetAILateralState();
+
                 aiStatusEl.innerText = "DEFENDING";
                 aiStatusEl.className = "font-bold text-red-400";
 
-                // Position between Player and Hoop
-                const idealDefPos = new THREE.Vector3().subVectors(player.position, hoopTargetPos).normalize().multiplyScalar(1.5).add(player.position);
+                // Calculate vector along the line between player and hoop
+                const hoopToPlayerDir = new THREE.Vector3().subVectors(player.position, hoopTargetPos);
+                hoopToPlayerDir.y = 0;
+                
+                const playerDistToHoop = hoopToPlayerDir.length();
+                if (playerDistToHoop > 0.0001) {
+                    hoopToPlayerDir.normalize();
+                } else {
+                    hoopToPlayerDir.set(0, 0, 1);
+                }
+
+                // Distance between player and defender (1.2 units)
+                const defDistance = 1.2;
+                const targetDistFromHoop = Math.max(0.5, playerDistToHoop - defDistance);
+
+                // Target position places defender directly between player and hoop
+                const idealDefPos = new THREE.Vector3().copy(hoopTargetPos).addScaledVector(hoopToPlayerDir, targetDistFromHoop);
                 idealDefPos.y = 0;
 
                 const moveDir = new THREE.Vector3().subVectors(idealDefPos, aiPlayer.position);
                 moveDir.y = 0;
 
-                if (moveDir.lengthSq() > 0.1) {
+                if (!aiIsJumping && moveDir.lengthSq() > 0.01) {
                     moveDir.normalize();
-                    aiPlayer.position.addScaledVector(moveDir, aiSpeed * 0.9 * delta);
+                    aiPlayer.position.addScaledVector(moveDir, aiSpeed * delta);
 
-                    // Defensive shuffle animation
                     aiPlayer.position.y = Math.abs(Math.sin(time * 12)) * 0.03;
                     aiLeftHip.rotation.z = Math.sin(time * 12) * 0.2;
                     aiRightHip.rotation.z = -Math.sin(time * 12) * 0.2;
-                } else {
+                } else if (!aiIsJumping) {
+                    aiPlayer.position.x = idealDefPos.x;
+                    aiPlayer.position.z = idealDefPos.z;
                     aiLeftHip.rotation.z = 0;
                     aiRightHip.rotation.z = 0;
                 }
 
                 aiPlayer.lookAt(player.position.x, aiPlayer.position.y, player.position.z);
 
-                // AI Steal / Contest logic
                 const distToPlayer = aiPlayer.position.distanceTo(player.position);
+
+                // Check if AI should jump to contest a shot/dunk attempt
+                if ((isChargingShot || isChargingDunk || jumpShotPhase > 0) && distToPlayer < 3.2 && !aiIsJumping) {
+                    aiIsJumping = true;
+                    aiJumpTimer = 0;
+                    showFeedback("AI JUMPING TO CONTEST!", "text-red-400 border-red-500/50", "bg-red-950/80");
+                }
+
                 if (distToPlayer < 1.3 && aiStealCooldown <= 0 && !isCrossover && !isDunking && jumpShotPhase === 0) {
-                    aiStealCooldown = 4.0; // Try steal every 4 sec
+                    aiStealCooldown = 4.0;
                     
-                    if (Math.random() < 0.35) { // 35% Steal Success Chance
+                    if (Math.random() < 0.35) {
                         showFeedback("AI STOLE THE BALL!", "text-red-500 border-red-500/50", "bg-red-950/80");
                         activeBall.heldBy = 'ai';
                     } else {
@@ -1220,6 +1458,8 @@
                 }
             } else {
                 // LOOSE BALL REBOUND MODE
+                resetAILateralState();
+
                 aiStatusEl.innerText = "CHASING BALL";
                 aiStatusEl.className = "font-bold text-orange-400";
 
@@ -1265,7 +1505,6 @@
                 netMesh.scale.set(1, 1, 1);
             }
 
-            // STABLE, DIRECT WASD MOVEMENT
             const moveInput = new THREE.Vector2(0, 0);
 
             if (!isDunking && !isChargingShot && !isChargingDunk && !isFalling && jumpShotPhase === 0) {
@@ -1280,7 +1519,6 @@
                     player.position.z += moveInput.y * playerSpeed * delta;
                 }
 
-                // Boundary bounds
                 player.position.x = Math.max(-roomWidth/2 + 0.8, Math.min(roomWidth/2 - 0.8, player.position.x));
                 player.position.z = Math.max(-roomLength/2 + 1.2, Math.min(roomLength/2 - 1.2, player.position.z));
 
@@ -1290,7 +1528,6 @@
             const isMoving = moveInput.lengthSq() > 0;
             const isDribblingActive = activeBall && activeBall.heldBy === 'player' && activeBall.state === 'dribbling';
 
-            // STAMINA MANAGEMENT & REGEN LOGIC
             if (isDribblingActive && (isMoving || isCrossover)) {
                 stamina = Math.max(0, stamina - staminaDrainRateDribble * delta);
                 if (stamina <= 0) triggerStaminaExhaustion();
@@ -1311,7 +1548,6 @@
                 staminaTextEl.className = "text-cyan-400";
             }
 
-            // RESET JOINTS TO BASE POSITIONS
             if (!isFalling) {
                 leftShoulder.rotation.set(0, 0, 0);
                 rightShoulder.rotation.set(0, 0, 0);
@@ -1324,7 +1560,6 @@
                 pelvis.rotation.set(0, 0, 0);
             }
 
-            // DEFENSIVE JUMP ANIMATION
             if (isDefensiveJumping) {
                 defJumpTimer += delta;
                 const defProgress = defJumpTimer / DEF_JUMP_DURATION;
@@ -1339,7 +1574,6 @@
                 }
             }
 
-            // STABLE WALK / RUN ANIMATION
             if (isMoving && !isDunking && !isChargingShot && !isChargingDunk && !isFalling && !isDefensiveJumping && jumpShotPhase === 0) {
                 const stride = time * 10;
                 const legAngle = Math.sin(stride) * 0.5;
@@ -1352,7 +1586,6 @@
                 player.position.y = 0;
             }
 
-            // CROSSOVER ANIMATIONS & STEP-BACK MOVE
             if (isCrossover && activeBall && activeBall.heldBy === 'player' && activeBall.state === 'dribbling' && !isDunking && !isFalling) {
                 const animSpeed = crossoverType === 'stepback' ? 4.5 : 6.5;
                 crossoverTimer += delta * animSpeed;
@@ -1405,7 +1638,6 @@
                 }
             }
 
-            // CHARGE JUMP SHOT (SPACE - ONLY WITH BALL)
             if (keys['Space'] && activeBall && activeBall.heldBy === 'player' && activeBall.state === 'dribbling' && !isDunking && !isChargingDunk && !isFalling) {
                 if (!isChargingShot) {
                     isChargingShot = true;
@@ -1424,6 +1656,9 @@
                 shotMeterProgress += delta * 210;
                 if (shotMeterProgress > 100) shotMeterProgress = 100;
                 meterBar.style.height = `${shotMeterProgress}%`;
+                
+                if (isChargingShot) updateGreenZoneSizeForShot();
+                if (isChargingDunk) updateGreenZoneSizeForDunk();
             }
 
             if (isChargingShot && activeBall) {
@@ -1438,7 +1673,6 @@
                 activeBall.mesh.position.copy(activeBall.pos);
             }
 
-            // RELEASE JUMP SHOT
             if (!keys['Space'] && isChargingShot) {
                 isChargingShot = false;
                 meterContainer.classList.add('hidden');
@@ -1470,7 +1704,6 @@
                 if (jumpShotPhase < 0.05) jumpShotPhase = 0;
             }
 
-            // DUNK EXECUTION & MISS PHYSICS
             if (isDunking) {
                 dunkTimer += delta * 1.6 * dunkSpeedFactor;
                 const progress = Math.min(1.0, dunkTimer);
@@ -1523,7 +1756,6 @@
                 }
             }
 
-            // FALL TO FLOOR & GET BACK UP ANIMATION
             if (isFalling) {
                 fallTimer += delta;
                 const fProg = fallTimer / FALL_DURATION;
@@ -1546,9 +1778,9 @@
                     player.rotation.x = THREE.MathUtils.lerp(-Math.PI / 2, 0, risePhase);
                     
                     leftShoulder.rotation.z = THREE.MathUtils.lerp(-1.2, 0, risePhase);
-                    rightShoulder.rotation.z = THREE.MathUtils.lerp(1.2, 0, risePhase);
+                    rightShoulder.rotation.z = THREE.MathUtils.lerp(1.2, 0, riseProgress);
                     leftHip.rotation.x = THREE.MathUtils.lerp(-0.8, 0, risePhase);
-                    rightHip.rotation.x = THREE.MathUtils.lerp(-0.8, 0, risePhase);
+                    rightHip.rotation.x = THREE.MathUtils.lerp(0.8, 0, risePhase);
                 } else {
                     isFalling = false;
                     player.position.y = 0;
@@ -1557,13 +1789,11 @@
                 }
             }
 
-            // UPDATE AI LOGIC
             updateAIBehavior(delta, time);
 
             updateAllBallsPhysics(delta);
             if (isChargingShot || isChargingDunk) updateMeterPosition();
 
-            // CAMERA FOLLOW PLAYER
             camera.position.x = THREE.MathUtils.lerp(camera.position.x, player.position.x, 0.1);
             camera.position.z = THREE.MathUtils.lerp(camera.position.z, player.position.z + 10.5, 0.1);
             camera.position.y = THREE.MathUtils.lerp(camera.position.y, player.position.y + 5.5, 0.1);
